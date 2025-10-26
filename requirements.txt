@@ -1,9 +1,5 @@
 streamlit
 pandas
 plotly
-zipfile
 nba_api
-requests 
-datetime
-ast
-re
+requests
