@@ -12,6 +12,7 @@ import nba_api.stats.static.teams as nba
 import unicodedata
 from datetime import datetime, timedelta
 import nba_api.stats.endpoints.playbyplayv3 as pbp
+from zipfile import ZipFile
 
 st.set_page_config(page_title='NBA Block Tracker',layout='wide',page_icon='https://www.shutterstock.com/image-vector/vector-illustration-basket-basketball-game-600nw-2417843359.jpg')
 st.markdown(
@@ -457,7 +458,13 @@ def display_player_image2(player_id, width2, caption2):
     )
 
 season = st.selectbox('Select Season',['2021-22','2022-23','2023-24','2024-25'])
-fulldf = pd.read_csv(f'{season}_blocks.csv')
+zip_path = f'{season}_blocks.csv.zip'
+
+with ZipFile(zip_path) as z:
+    # Pick the first CSV that does NOT start with __MACOSX
+    csv_file = [f for f in z.namelist() if not f.startswith('__MACOSX')][0]
+    fulldf = pd.read_csv(z.open(csv_file))
+
 fulldf['block_team_name'] = np.where(
      fulldf['possession_team'] == fulldf['home_team_name'],
      fulldf['away_team_name'],   # opposite of possession = away when possession is home
