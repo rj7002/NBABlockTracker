@@ -2,11 +2,9 @@ import re
 import pandas as pd
 import streamlit as st
 import requests
-import json
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import sqlite3
 import ast
 import nba_api.stats.static.teams as nba
 import unicodedata
