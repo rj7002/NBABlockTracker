@@ -456,56 +456,19 @@ def display_player_image2(player_id, width2, caption2):
         unsafe_allow_html=True
     )
 
-DB_PATH = '/Users/ryan/Desktop/ShotQuality/nbatracking2324'
-conn = sqlite3.connect(DB_PATH)
-
-@st.cache_data
-def get_all_games(db_path):
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT DISTINCT game_id FROM testnba", conn)
-    conn.close()
-    return df
-
-@st.cache_data
-def get_team_list(db_path):
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT DISTINCT possession_team FROM testnba", conn)
-    conn.close()
-    return df['possession_team'].unique()
-    # teamslist = nba.get_teams()
-    # teamlistdf = pd.DataFrame(teamslist)
-    # return teamlistdf['full_name'].unique()
-
-@st.cache_data
-def get_team_id(team, db_path):
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query(f"SELECT DISTINCT team_id FROM testnba WHERE possession_team = '{team}'", conn)
-    conn.close()
-    return df['team_id'].iloc[0]
-
-@st.cache_data
-def get_team_game_ids(team, db_path):
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query(f"SELECT DISTINCT game_id FROM testnba WHERE possession_team = '{team}'", conn)
-    conn.close()
-    return df['game_id'].unique()
-
-@st.cache_data
-def get_tracking_data(game_ids, db_path):
-    conn = sqlite3.connect(db_path)
-    game_ids_str = ','.join(map(str, game_ids))
-    query = f"SELECT * FROM testnba WHERE game_id IN ({game_ids_str})"
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
-
-gamestotal = pd.read_sql_query("SELECT DISTINCT game_id FROM testnba", con=sqlite3.connect(DB_PATH))
-st.write("Total unique games:", len(gamestotal))
+season = st.selectbox('Select Season',['2021-22','2022-23','2023-24','2024-25'])
+fulldf = pd.read_csv(f'{season}_blocks.csv')
+fulldf['block_team_name'] = np.where(
+     fulldf['possession_team'] == fulldf['home_team_name'],
+     fulldf['away_team_name'],   # opposite of possession = away when possession is home
+     fulldf['home_team_name']   # otherwise opposite = home when possession is away
+ )
 teamorplayer = st.pills('Filter by team or player',['Team','Player'],selection_mode='single',default='Player')
 if teamorplayer == 'Team':
-    team_options = get_team_list(DB_PATH)
+    team_options = fulldf['block_team_name'].unique()
     team = st.selectbox('Select a team', team_options)
     nbateamid = nba.find_teams_by_full_name(team)[0]["id"]
+   
 else:
     import nba_api.stats.endpoints.playerindex as nba
     df = nba.PlayerIndex(season='2023-24',historical_nullable=1,active_nullable=1).get_data_frames()[0]
@@ -526,13 +489,6 @@ from nba_api.stats.endpoints import leaguegamefinder
 gamefinder = leaguegamefinder.LeagueGameFinder(team_id_nullable=nbateamid)
 gamefind = gamefinder.get_data_frames()[0]
 
-teamid = get_team_id(team, DB_PATH)
-# st.write(teamid)
-
-gameids = get_team_game_ids(team, DB_PATH)
-# st.write(gameids)
-
-fulldf = get_tracking_data(gameids, DB_PATH)
 # types = pd.DataFrame(fulldf.dtypes.reset_index())
 # types.columns = ['index', 'dtype']
 # types['name'] = types['index'] + " - " + types["dtype"].astype(str)
@@ -543,6 +499,8 @@ if teamorplayer == 'Player':
     fulldf = fulldf[fulldf['secondary_name'] == player]
 else:
     display_player_image2(nbateamid,300,'')
+    fulldf = fulldf[fulldf['block_team_name'] == team]
+
 nav = st.sidebar.selectbox('Navigation',['Blocks'])
 if nav == 'Assists':
     st.warning('Note: Some assists may be missing due to missing tracking data')
@@ -1133,7 +1091,6 @@ if nav == 'Rebounds':
         ),
         showlegend=False,
          hovertemplate='Rebounds: %{z}<extra></extra>'
-        
     ))
     court_fig2.add_trace(go.Histogram2dContour(
         x=rebound2['court_y'],  # Passer x-coordinates
@@ -1203,12 +1160,12 @@ if nav == 'Blocks':
         "<b>Date<b>: %{customdata[8]}<br>" 
 
     )
-    block = fulldf[(fulldf['second_action'] == 'block')]
-    teamids = block['team_id'].unique()
-    block = block[(block['court_player_name'] == block['secondary_name'])]
-    block['team_id'] = block['team_id'].astype(int)
-    teamid = int(teamid)
-    block = block[block['team_id'] != teamid]
+    block = fulldf
+    # teamids = block['team_id'].unique()
+    # block = block[(block['court_player_name'] == block['secondary_name'])]
+    # block['team_id'] = block['team_id'].astype(int)
+    # teamid = int(teamid)
+    # block = block[block['team_id'] != teamid]
     block['distance_covered'] = round(np.sqrt((block['shot_x'] - block['court_x'])**2 + (block['shot_y'] - block['court_y'])**2),2)
     block['play_descriptors'] = block['play_descriptors'].apply(ast.literal_eval)
 
@@ -1221,12 +1178,11 @@ if nav == 'Blocks':
     block['shot_y'] = 10*block['shot_y']-250
 
     block['time'] = block['minutes'].astype(str) + ':' + block['seconds'].astype(str)
-    block['feature_store'] = block['feature_store'].apply(json.loads)
-    feature_df = block['feature_store'].apply(pd.Series)
-    block = block.drop(columns=['feature_store'])  # Optional
-    block = pd.concat([block, feature_df], axis=1)
+    # block['feature_store'] = block['feature_store'].apply(json.loads)
+    # feature_df = block['feature_store'].apply(pd.Series)
+    # block = block.drop(columns=['feature_store'])  # Optional
+    # block = pd.concat([block, feature_df], axis=1)
     block['ClosestDefVelBlockAng'] = round(np.rad2deg(block['Closest Defender Velocity Angle']))
-    st.write(block)
     st.sidebar.title('Filters')
     blockers = block['secondary_name'].unique()
     shooters = block['shooter_name'].unique()
