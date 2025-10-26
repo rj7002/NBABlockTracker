@@ -462,18 +462,32 @@ with ZipFile(zip_path) as z:
     # Pick the first CSV that does NOT start with __MACOSX
     csv_file = [f for f in z.namelist() if not f.startswith('__MACOSX')][0]
     fulldf = pd.read_csv(z.open(csv_file))
+if season != '2024-25':
+    fulldf['block_team_name'] = np.where(
+        fulldf['possession_team'] == fulldf['home_team_name'],
+        fulldf['away_team_name'],   # opposite of possession = away when possession is home
+        fulldf['home_team_name']   # otherwise opposite = home when possession is away
+    )
+    teamorplayer = st.pills('Filter by team or player',['Team','Player'],selection_mode='single',default='Player')
+    if teamorplayer == 'Team':
+        team_options = fulldf['block_team_name'].unique()
+        team = st.selectbox('Select a team', team_options)
+        nbateamid = nba.find_teams_by_full_name(team)[0]["id"]
+    
+    else:
+        import nba_api.stats.endpoints.playerindex as nba
+        df = nba.PlayerIndex(season='2023-24',historical_nullable=1,active_nullable=1).get_data_frames()[0]
+        df['fullName'] = df['PLAYER_FIRST_NAME'] + " " + df['PLAYER_LAST_NAME']
+        df['teamName'] = df['TEAM_CITY'] + " " + df['TEAM_NAME']
+        players = df['fullName'].unique()
+        player = st.selectbox('Select a player',players)
+        df = df[df['fullName'] == player]
+        playerid = df['PERSON_ID'].iloc[0]
+        team = df['teamName'].iloc[0]
+        nbateamid = df['TEAM_ID'].iloc[0]
 
-fulldf['block_team_name'] = np.where(
-     fulldf['possession_team'] == fulldf['home_team_name'],
-     fulldf['away_team_name'],   # opposite of possession = away when possession is home
-     fulldf['home_team_name']   # otherwise opposite = home when possession is away
- )
-teamorplayer = st.pills('Filter by team or player',['Team','Player'],selection_mode='single',default='Player')
-if teamorplayer == 'Team':
-    team_options = fulldf['block_team_name'].unique()
-    team = st.selectbox('Select a team', team_options)
-    nbateamid = nba.find_teams_by_full_name(team)[0]["id"]
-   
+    
+        player = unicodedata.normalize('NFKD', player).encode('ASCII', 'ignore').decode('utf-8')
 else:
     import nba_api.stats.endpoints.playerindex as nba
     df = nba.PlayerIndex(season='2023-24',historical_nullable=1,active_nullable=1).get_data_frames()[0]
@@ -486,9 +500,6 @@ else:
     team = df['teamName'].iloc[0]
     nbateamid = df['TEAM_ID'].iloc[0]
 
-  
-    player = unicodedata.normalize('NFKD', player).encode('ASCII', 'ignore').decode('utf-8')
-
 from nba_api.stats.endpoints import leaguegamefinder
 
 gamefinder = leaguegamefinder.LeagueGameFinder(team_id_nullable=nbateamid)
@@ -499,660 +510,19 @@ gamefind = gamefinder.get_data_frames()[0]
 # types['name'] = types['index'] + " - " + types["dtype"].astype(str)
 # for index, row in types.iterrows():
 #     st.write(row['name'])
-if teamorplayer == 'Player':
+if season != '2024-25':
+    if teamorplayer == 'Player':
+        display_player_image(playerid,300,'')
+        fulldf = fulldf[fulldf['secondary_name'] == player]
+    else:
+        display_player_image2(nbateamid,300,'')
+        fulldf = fulldf[fulldf['block_team_name'] == team]
+else:
     display_player_image(playerid,300,'')
     fulldf = fulldf[fulldf['secondary_name'] == player]
-else:
-    display_player_image2(nbateamid,300,'')
-    fulldf = fulldf[fulldf['block_team_name'] == team]
 
-nav = st.sidebar.selectbox('Navigation',['Blocks'])
-if nav == 'Assists':
-    st.warning('Note: Some assists may be missing due to missing tracking data')
-
-    assist = fulldf[fulldf['second_action'] == 'assist']
-    # teamids = assist['team_id'].unique()
-    assist = assist[(assist['court_player_name'] == assist['shooter_name']) | (assist['court_player_name'] == assist['secondary_name'])]
-    # assist[assist['team_id'] == teamid]
-    teamid = int(teamid)
-    assist['team_id'] = assist['team_id'].astype(int)
-    assist = assist[assist['team_id'] == teamid]
-    assisters = assist['secondary_name'].unique()
-    # assistercounts = assist[assist['court_player_name'] == assist['secondary_name']].groupby('secondary_name')['second_action'].count().reset_index()
-    # for index, row in assistercounts.iterrows():
-    #     # assisters.append(f'{row['secondary_name']} ({row['second_action']})')
-    #     assisters.append(f'{row['secondary_name']}')
-    shooters = assist['shooter_name'].unique()
-    st.sidebar.title('Filters')
-    assister = st.sidebar.multiselect('Select assisters',assisters)
-    shooter = st.sidebar.multiselect('Select shooters',shooters)
-    period_filter = st.sidebar.selectbox(
-            "Period", 
-            options=["All"] + sorted(assist['period'].unique().tolist())
-        )
-
-    minutesmin, minutesmax = st.sidebar.slider(
-            "Minutes", 
-            min_value=int(assist['minutes'].min()), 
-            max_value=int(assist['minutes'].max()), 
-            value=(int(assist['minutes'].min()), int(assist['minutes'].max()))
-        )
-    assist = assist[
-            (assist['minutes'] >= minutesmin) & 
-            (assist['minutes'] <= minutesmax)
-        ]
-    if period_filter != "All":
-            assist = assist[assist['period'] == period_filter]
-
-    assist['play_descriptors'] = assist['play_descriptors'].apply(ast.literal_eval)
-
-    unique_descriptors = set(descriptor for sublist in assist['play_descriptors'] for descriptor in sublist)
-    unique_descriptors = sorted(unique_descriptors)
-    selected_descriptors = st.sidebar.multiselect("Choose play descriptors", unique_descriptors)
-    if selected_descriptors:
-        assist = assist[assist['play_descriptors'].apply(lambda x: any(descriptor in x for descriptor in selected_descriptors))]
-    if shooter:
-        assist = assist[assist['shooter_name'].isin(shooter)]
-    if assister:
-        assist = assist[assist['secondary_name'].isin(assister)]
-
-    passer = assist[(assist['court_player_name'] == assist['secondary_name'])]
-    shooter = assist[(assist['court_player_name'] != assist['secondary_name'])]
-    # st.write(len(passer))
-
-
-    court_fig = go.Figure()
-    draw_plotly_court(court_fig, show_title=False, labelticks=False, show_axis=False,
-                                glayer='above', bg_color='dark gray', margins=0)
-
-    passer['pass_distance'] = np.sqrt((passer['shot_x'] - passer['court_x'])**2 + (passer['shot_y'] - passer['court_y'])**2)
-    pass_dist_min, pass_dist_max = st.sidebar.slider(
-            "Pass Distance (ft)", 
-            min_value=int(passer['pass_distance'].min()), 
-            max_value=int(passer['pass_distance'].max()), 
-            value=(int(passer['pass_distance'].min()), int(passer['pass_distance'].max()))
-        )
-    passer = passer[
-            (passer['pass_distance'] >= pass_dist_min-1) & 
-            (passer['pass_distance'] <= pass_dist_max+1)
-        ]
-    # st.write(len(passer))
-
-    passer['pass_distance'] = round(passer['pass_distance'],2)
-    shooter = shooter.merge(
-    passer[['play_id', 'pass_distance']],
-    on='play_id',
-    how='left'
-)
-    
-    shooter = shooter[
-            (shooter['pass_distance'] >= pass_dist_min-1) & 
-            (shooter['pass_distance'] <= pass_dist_max+1)
-        ]
-    shooter['court_x'] = 10*shooter['court_x']-50
-    shooter['court_y'] = 10*shooter['court_y']-250
-    passer['court_x'] = 10*passer['court_x']-50
-    passer['court_y'] = 10*passer['court_y']-250
-
-    passer['shot_x'] = 10*passer['shot_x']-50
-    passer['shot_y'] = 10*passer['shot_y']-250
-    passer['seconds'] = passer['seconds'].astype(str).str.zfill(2)
-    passer['time'] = passer['minutes'].astype(str) + ':' + passer['seconds'].astype(str)
-    shooter['time'] = shooter['minutes'].astype(str) + ':' + shooter['seconds'].astype(str)
-
-    hover_template = (
-        "<b>Passer<b>: %{customdata[0]}<br>" +
-        "<b>Shooter<b>: %{customdata[1]}<br>" + 
-        "<b>Pass Distance<b>: %{customdata[2]} ft<br>" + 
-        "<b>Period<b>: %{customdata[3]}<br>" +
-        "<b>Time<b>: %{customdata[4]}<br>" + 
-        "<b>Shot Type<b>: %{customdata[5]} (%{customdata[6]})<br>" + 
-        "<b>Game<b>: %{customdata[7]}<br>"
-        "<b>Date<b>: %{customdata[8]}"
-    )
-    hover_template2 = (
-        "<b>%{customdata[0]} to %{customdata[1]}<br>" + 
-        "<b>Pass Distance<b>: %{customdata[2]}<br>" 
-    )
-    # st.write(len(passer))
-    # st.write(len(passer['game_id_x'].unique()))
-    common_play_ids = set(passer['play_id']) & set(shooter['play_id'])
-    # st.write(common_play_ids)
-    # passer = passer[passer['play_id'].isin(common_play_ids)].reset_index(drop=True)
-    # shooter = shooter[shooter['play_id'].isin(common_play_ids)].reset_index(drop=True)
-    # passer = passer.drop_duplicates(subset='play_id')
-    # shooter = shooter.drop_duplicates(subset='play_id')
-    arrows = st.sidebar.checkbox('Hide arrows',value=False)
-    # location = st.sidebar.radio('Pass Location',['Start','End','None'])
-    if arrows == False:
-        for i in range(len(passer)):
-            # Draw a line with an arrowhead
-            court_fig.add_trace(go.Scatter(
-                x=[passer['court_y'].iloc[i], passer['shot_y'].iloc[i]],  # Passer and Shooter x coordinates
-                y=[passer['court_x'].iloc[i], passer['shot_x'].iloc[i]],  # Passer and Shooter y coordinates
-                mode='lines+markers',
-                line=dict(color='gold', width=2, shape='linear'),  # Arrow properties
-                marker=dict(size=12, color='gold',symbol='arrow',angleref="previous",opacity=1),  # Optional: Add a marker at the passer's location
-                opacity=0.5,
-                # customdata=passer[['court_player_name','shooter_name']].iloc[i],  # Use customdata for makes only
-                hoverinfo='none',  # Set hoverinfo to text
-                # hovertemplate=hover_template
-                # name=f'Pass to Shooter {i+1}',
-            ))
-    
-
-    # if location == 'Start':
-    court_fig.add_trace(go.Scatter(
-        x=passer['court_y'], 
-        y=passer['court_x'], 
-        mode='markers',
-        marker=dict(size=10, color='red', opacity=1,symbol='star'),
-        name='',
-        customdata=passer[['court_player_name','shooter_name','pass_distance','period','time','action_type','play_descriptors','game_name','game_datetime_utc']],  # Use customdata for makes only
-        hoverinfo='text',  # Set hoverinfo to text
-        hovertemplate=hover_template
-    ))
-        # court_fig.add_trace(go.Scatter(
-        #     x=5-passer['court_y'], 
-        #     y=passer['court_x'], 
-        #     mode='markers',
-        #     marker=dict(size=10, color='blue', opacity=1,symbol='circle'),
-        #     name='',
-        #     customdata=passer[['court_player_name','shooter_name','pass_distance','period','time','action_type','play_descriptors','game_name','game_datetime_utc']],  # Use customdata for makes only
-        #     hoverinfo='text',  # Set hoverinfo to text
-        #     hovertemplate=hover_template
-        # ))
-    # if location == 'End':
-    #     court_fig.add_trace(go.Scatter(
-    #         x=shooter['court_y'], 
-    #         y=shooter['court_x'], 
-    #         mode='markers',
-    #         marker=dict(size=10, color='green', opacity=1,symbol='circle'),
-    #         name='',
-    #         customdata=shooter[['secondary_name','shooter_name','pass_distance','period','time','action_type','play_descriptors','game_name','game_datetime_utc']],  # Use customdata for makes only
-    #         hoverinfo='text',  # Set hoverinfo to text
-    #         hovertemplate=hover_template
-    #     ))
-    c1,c2= st.columns(2)
-    with c1:    
-        eventdata = st.plotly_chart(court_fig,use_container_width=True,on_select='rerun')
-        # st.write(eventdata)
-        if eventdata and "selection" in eventdata and eventdata["selection"]["points"]:
-            x = eventdata["selection"]["points"][0]["x"]
-            y = eventdata["selection"]["points"][0]["y"]
-            date = eventdata["selection"]["points"][0]["customdata"][8]
-            time = eventdata["selection"]["points"][0]["customdata"][4]
-            time = time.replace(".0", "")
-            period = eventdata["selection"]["points"][0]["customdata"][3]
-            date_obj = datetime.strptime(date, "%m-%d-%Y")
-            for offset in [0, -1, 1]:
-                current_date = date_obj + timedelta(days=offset)
-                formatted_date = current_date.strftime("%Y-%m-%d")
-                
-                filtered_games = gamefind[gamefind["GAME_DATE"] == formatted_date]
-                
-                if not filtered_games.empty:
-                    # st.write(f"Using date: {formatted_date}")
-                    gamefind = filtered_games
-                    break
-            nbagameid = gamefind["GAME_ID"].iloc[0]
-            oldgameid = nbagameid
-            nbagameid = str(nbagameid)[2:]
-            # st.write(gamefind)
-            # st.write(x)
-            # st.write(y)
-            # st.write(nbagameid)
-            pbp = pbp.PlayByPlayV3(game_id=oldgameid).get_data_frames()[0]
-            
-            pbp['time'] = pbp['clock'].apply(fixTime)
-            # st.write(pbp)
-
-            # Convert your input time string to timedelta
-            target_time = parse_time_str(time)
-
-            # First try exact match
-            for offset in [0, -1, 1]:  # seconds
-                adjusted_time = target_time + timedelta(seconds=offset)
-                
-                # Convert back to string to match the format in your DataFrame
-                minutes = int(adjusted_time.total_seconds() // 60)
-                seconds = adjusted_time.total_seconds() % 60
-                adjusted_time_str = f"{minutes}:{seconds:.1f}".rstrip('0').rstrip('.')
-
-                # Apply filter
-                filtered_pbp = pbp[(pbp['period'] == period) & (pbp['time'] == adjusted_time_str)]
-
-                if not filtered_pbp.empty:
-                    pbp = filtered_pbp
-                    break
-            actionid = pbp["actionNumber"].iloc[0]
-            url = f'https://api.databallr.com/api/get_video/{nbagameid}/{actionid}'
-            response = requests.get(url)
-            if response.status_code == 200:
-                video_url = response.text.strip()
-                st.markdown(
-                f"""
-                <div style="text-align: center;">
-                    <video controls autoplay width="500" style="margin: auto;">
-                        <source src="{video_url}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            else:
-                st.error('No video found')
-            # st.write(pbp)
-
-    court_fig2 = go.Figure()
-    draw_plotly_court(court_fig2, show_title=False, labelticks=False, show_axis=False,
-                                glayer='above', bg_color='dark gray', margins=0)
-    # if location == 'Start':
-    passer1 = passer[passer['court_x'] > 425]
-    passer2 = passer[passer['court_x'] <= 425]
-    court_fig2.add_trace(go.Histogram2dContour(
-        x=passer1['court_y'],  # Passer x-coordinates
-        y=passer1['court_x'],  # Passer y-coordinates
-        # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-        colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-        # opacity=0.6,  # Make the contour semi-transparent
-        contours=dict(
-            coloring='heatmap',  # Coloring the contours based on heatmap density
-            showlabels=False,  # Show contour labels (optional)
-            labelfont=dict(size=12)  # Font size of the contour labels (optional)
-        ),
-        showlegend=False,
-         hovertemplate='Assists: %{z}<extra></extra>'
-    ))
-    court_fig2.add_trace(go.Histogram2dContour(
-        x=passer2['court_y'],  # Passer x-coordinates
-        y=passer2['court_x'],  # Passer y-coordinates
-        # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-        colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-        # opacity=0.6,  # Make the contour semi-transparent
-        contours=dict(
-            coloring='heatmap',  # Coloring the contours based on heatmap density
-            showlabels=False,  # Show contour labels (optional)
-            labelfont=dict(size=12)  # Font size of the contour labels (optional)
-        ),
-        showlegend=False,
-         hovertemplate='Assists: %{z}<extra></extra>'
-    ))
-    # if location == 'End':
-    #     shooter1 = shooter[shooter['court_x'] > 425]
-    #     shooter2 = shooter[shooter['court_x'] <= 425]
-    #     court_fig2.add_trace(go.Histogram2dContour(
-    #         x=shooter1['court_y'],  # Passer x-coordinates
-    #         y=shooter1['court_x'],  # Passer y-coordinates
-    #         # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         # opacity=0.6,  # Make the contour semi-transparent
-    #         contours=dict(
-    #             coloring='heatmap',  # Coloring the contours based on heatmap density
-    #             showlabels=False,  # Show contour labels (optional)
-    #             labelfont=dict(size=12)  # Font size of the contour labels (optional)
-    #         ),
-    #         showlegend=False
-    #     ))
-    #     court_fig2.add_trace(go.Histogram2dContour(
-    #         x=shooter2['court_y'],  # Passer x-coordinates
-    #         y=shooter2['court_x'],  # Passer y-coordinates
-    #         # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         # opacity=0.6,  # Make the contour semi-transparent
-    #         contours=dict(
-    #             coloring='heatmap',  # Coloring the contours based on heatmap density
-    #             showlabels=False,  # Show contour labels (optional)
-    #             labelfont=dict(size=12)  # Font size of the contour labels (optional)
-    #         ),
-    #         showlegend=False
-    #     ))
-    court_fig2.update_traces(showscale=False)
-    with c2:
-        st.plotly_chart(court_fig2,use_container_width=False)
-    ca1,ca2 = st.columns(2)
-    with ca1:
-        histfig = px.histogram(data_frame=passer,x='pass_distance')
-        histfig.update_traces(marker_line_color='black', marker_line_width=1)
-        histfig.update_layout(
-        title="Pass Distance Distribution",
-        xaxis_title="Pass Distance (ft)",
-        yaxis_title="Count"
-    )
-        st.plotly_chart(histfig)
-    with ca2:
-        barfig = px.histogram(passer,x='period',color='action_type')
-        barfig.update_traces(marker_line_color='black', marker_line_width=1)
-        barfig.update_layout(title='Assist Counts by Period')
-        st.plotly_chart(barfig)
-    cb1,cb2 = st.columns(2)
-    with cb1:
-        passer2 = passer
-        # passer2['play_descriptors'] = passer2['play_descriptors'].apply(ast.literal_eval)
-        passer_exploded = passer2.explode('play_descriptors')
-        avgpasslength = passer_exploded.groupby('play_descriptors')['pass_distance'].mean().reset_index()
-        fig = px.box(passer_exploded, 
-             x='play_descriptors', 
-             y='pass_distance', 
-             title='Pass Distance Distribution by Descriptor',
-             points='outliers')
-
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig)
-    with cb2:
-        if assister or teamorplayer == 'Player':
-            # counts = passer['shooter_name'].value_counts().reset_index()
-            # counts.columns = ['shooter_name', 'count']
-            # piefig = px.pie(counts, names='shooter_name', values='count', title='Shooter Distribution')
-            passer = passer.reset_index(drop=True)  # ensure index is clean
-            passer['play_id'] = passer.index
-
-            df_exploded = passer.explode('play_descriptors')
-
-            secondary_labels = df_exploded['secondary_name'].unique().tolist()
-            shooter_labels = df_exploded['shooter_name'].unique().tolist()
-            play_labels = df_exploded['play_descriptors'].unique().tolist()
-
-            labels = secondary_labels + shooter_labels + play_labels
-
-            secondary_idx = {name: i for i, name in enumerate(secondary_labels)}
-            shooter_idx = {name: i + len(secondary_labels) for i, name in enumerate(shooter_labels)}
-            play_idx = {name: i + len(secondary_labels) + len(shooter_labels) for i, name in enumerate(play_labels)}
-
-
-            sec_to_shooter = df_exploded.groupby(['secondary_name', 'shooter_name'])['play_id'].nunique().reset_index(name='count')
-
-            shooter_to_play = df_exploded.groupby(['shooter_name', 'play_descriptors'])['play_id'].nunique().reset_index(name='count')
-
-            source_sec = sec_to_shooter['secondary_name'].map(secondary_idx)
-            target_shooter = sec_to_shooter['shooter_name'].map(shooter_idx)
-            value_sec_shooter = sec_to_shooter['count']
-
-            source_shooter = shooter_to_play['shooter_name'].map(shooter_idx)
-            target_play = shooter_to_play['play_descriptors'].map(play_idx)
-            value_shooter_play = shooter_to_play['count']
-
-            sources = pd.concat([source_sec, source_shooter])
-            targets = pd.concat([target_shooter, target_play])
-            values = pd.concat([value_sec_shooter, value_shooter_play])
-            piefig = go.Figure(data=[go.Sankey(
-                node=dict(
-                    pad=15,
-                    thickness=20,
-                    line=dict(color="black", width=0.5),
-                    label=labels,
-                ),
-                link=dict(
-                    source=sources,
-                    target=targets,
-                    value=values
-                )
-            )])
-
-            piefig.update_layout(title_text="Passer → Shooter → Play Description Sankey", font_size=12)
-        else:
-            counts = passer['secondary_name'].value_counts().reset_index()
-            counts.columns = ['secondary_name', 'count']
-            piefig = px.pie(counts, names='secondary_name', values='count', title='Pass Distribution')
-        st.plotly_chart(piefig)
-if nav == 'Rebounds':
-    st.warning('Note: Many rebounds may be missing due to missing tracking data')
-
-    hover_template = (
-        "<b>Rebounder<b>: %{customdata[0]}<br>" +
-        "<b>Shooter<b>: %{customdata[1]}<br>" + 
-        "<b>Rebound Type<b>: %{customdata[2]}<br>" + 
-        "<b>Period<b>: %{customdata[3]}<br>" +
-        "<b>Time<b>: %{customdata[4]}<br>" + 
-        "<b>Shot Type<b>: %{customdata[5]} (%{customdata[6]})<br>" + 
-        "<b>Game<b>: %{customdata[7]}<br>"
-        "<b>Date<b>: %{customdata[8]}"
-    )
-    # st.write(fulldf.groupby('second_action')['play_id'].count())
-    rebound = fulldf[(fulldf['second_action'] == 'dreb') | (fulldf['second_action'] == 'oreb')]
-    # st.write(rebound.groupby('second_action')['play_id'].count())
-    # st.write(fulldf.drop_duplicates(subset='play_id'))
-    teamids = rebound['team_id'].unique()
-    rebound = rebound[(rebound['court_player_name'] == rebound['secondary_name'])]
-    rebound['distance_from_shot'] = np.sqrt((rebound['shot_x'] - rebound['court_x'])**2 + (rebound['shot_y'] - rebound['court_y'])**2)
-    rebound['play_descriptors'] = rebound['play_descriptors'].apply(ast.literal_eval)
-
-    # st.write(rebound.groupby('second_action')['play_id'].count())
-
-    rebound['team_id'] = rebound['team_id'].astype(int)
-    teamid = int(teamid)
-    oreb = rebound[rebound['second_action'] == 'oreb']
-    dreb = rebound[rebound['second_action'] == 'dreb']
-
-    oreb = oreb[oreb['team_id'] == teamid]
-    dreb = dreb[dreb['team_id'] != teamid]
-    rebound = pd.concat([oreb,dreb],axis=0,ignore_index=True)
-    # st.write(rebound.groupby('second_action')['play_id'].count())
-
-    # st.write(len(rebound))
-    # st.write(len(rebound['game_id_x'].unique()))
-
-
-    rebound['court_x'] = 10*rebound['court_x']-50
-    rebound['court_y'] = 10*rebound['court_y']-250
-    rebound['time'] = rebound['minutes'].astype(str) + ':' + rebound['seconds'].astype(str)
-    st.sidebar.title('Filters')
-    rebounders = rebound['secondary_name'].unique()
-    shooters = rebound['shooter_name'].unique()
-    rebounder = st.sidebar.multiselect('Select rebounder',rebounders)
-    shooter = st.sidebar.multiselect('Select shooters',shooters)
-    period_filter = st.sidebar.selectbox(
-            "Period", 
-            options=["All"] + sorted(rebound['period'].unique().tolist())
-        )
-
-    minutesmin, minutesmax = st.sidebar.slider(
-            "Minutes", 
-            min_value=int(rebound['minutes'].min()), 
-            max_value=int(rebound['minutes'].max()), 
-            value=(int(rebound['minutes'].min()), int(rebound['minutes'].max()))
-        )
-    rebound = rebound[
-            (rebound['minutes'] >= minutesmin) & 
-            (rebound['minutes'] <= minutesmax)
-        ]
-    if period_filter != "All":
-            rebound = rebound[rebound['period'] == period_filter]
-    unique_descriptors = set([descriptor for sublist in rebound['play_descriptors'] for descriptor in sublist])
-    unique_descriptors = sorted(unique_descriptors)
-    reboundtypes = rebound['second_action'].unique()
-    type = st.sidebar.multiselect('Rebound Type',reboundtypes)
-    if type:
-        rebound = rebound[rebound['second_action'].isin(type)]
-    selected_descriptors = st.sidebar.multiselect("Choose play descriptors", unique_descriptors)
-    if selected_descriptors:
-        rebound = rebound[rebound['play_descriptors'].apply(lambda x: any(descriptor in x for descriptor in selected_descriptors))]
-    if shooter:
-        rebound = rebound[rebound['shooter_name'].isin(shooter)]
-    if rebounder:
-        rebound = rebound[rebound['secondary_name'].isin(rebounder)]
-    
-    # st.write(len(rebound))
-    court_fig = go.Figure()
-    draw_plotly_court(court_fig, show_title=False, labelticks=False, show_axis=False,
-                                glayer='above', bg_color='dark gray', margins=0)
-    court_fig.add_trace(go.Scatter(
-            x=rebound['court_y'], 
-            y=rebound['court_x'], 
-            mode='markers',
-            marker=dict(size=10, color='red', opacity=1,symbol='star-square'),
-            name='',
-            customdata=rebound[['court_player_name','shooter_name','second_action','period','time','action_type','play_descriptors','game_name','game_datetime_utc']],  # Use customdata for makes only
-            hoverinfo='text',  # Set hoverinfo to text
-            hovertemplate=hover_template
-        ))
-    c1,c2 = st.columns(2)
-    with c1:
-        # st.plotly_chart(court_fig,use_container_width=False)
-        eventdata = st.plotly_chart(court_fig,use_container_width=True,on_select='rerun')
-        # st.write(eventdata)
-        if eventdata and "selection" in eventdata and eventdata["selection"]["points"]:
-            x = eventdata["selection"]["points"][0]["x"]
-            y = eventdata["selection"]["points"][0]["y"]
-            date = eventdata["selection"]["points"][0]["customdata"][8]
-            time = eventdata["selection"]["points"][0]["customdata"][4]
-            time = time.replace(".0", "")
-            period = eventdata["selection"]["points"][0]["customdata"][3]
-            date_obj = datetime.strptime(date, "%m-%d-%Y")
-            for offset in [0, -1, 1]:
-                current_date = date_obj + timedelta(days=offset)
-                formatted_date = current_date.strftime("%Y-%m-%d")
-                
-                filtered_games = gamefind[gamefind["GAME_DATE"] == formatted_date]
-                
-                if not filtered_games.empty:
-                    # st.write(f"Using date: {formatted_date}")
-                    gamefind = filtered_games
-                    break
-            nbagameid = gamefind["GAME_ID"].iloc[0]
-            oldgameid = nbagameid
-            nbagameid = str(nbagameid)[2:]
-            # st.write(gamefind)
-            # st.write(x)
-            # st.write(y)
-            # st.write(nbagameid)
-            pbp = pbp.PlayByPlayV3(game_id=oldgameid).get_data_frames()[0]
-            def fixTime(iso_str):
-                # Match minutes and seconds using regex
-                match = re.match(r"PT(\d+)M(\d+(?:\.\d+)?)S", iso_str)
-                if not match:
-                    return None  # or raise an error
-                
-                minutes, seconds = match.groups()
-
-                # If seconds ends in .0, strip it
-                seconds = str(float(seconds)).rstrip('0').rstrip('.') 
-                
-                return f"{int(minutes)}:{seconds}"
-            pbp['time'] = pbp['clock'].apply(fixTime)
-            # st.write(pbp)
-            def parse_time_str(time_str):
-                """Convert a string like '1:19.0' into a timedelta object."""
-                try:
-                    minutes, seconds = time_str.split(':')
-                    return timedelta(minutes=int(minutes), seconds=float(seconds))
-                except Exception as e:
-                    print("Error parsing time:", e)
-                    return None
-
-            # Convert your input time string to timedelta
-            target_time = parse_time_str(time)
-
-            # First try exact match
-            for offset in [0, -1, 1]:  # seconds
-                adjusted_time = target_time + timedelta(seconds=offset)
-                
-                # Convert back to string to match the format in your DataFrame
-                minutes = int(adjusted_time.total_seconds() // 60)
-                seconds = adjusted_time.total_seconds() % 60
-                adjusted_time_str = f"{minutes}:{seconds:.1f}".rstrip('0').rstrip('.')
-
-                # Apply filter
-                filtered_pbp = pbp[(pbp['period'] == period) & (pbp['time'] == adjusted_time_str)]
-
-                if not filtered_pbp.empty:
-                    pbp = filtered_pbp
-                    break
-            actionid = pbp["actionNumber"].iloc[0]
-            url = f'https://api.databallr.com/api/get_video/{nbagameid}/{actionid}'
-            response = requests.get(url)
-            if response.status_code == 200:
-                video_url = response.text.strip()
-                st.markdown(
-                f"""
-                <div style="text-align: center;">
-                    <video controls autoplay width="500" style="margin: auto;">
-                        <source src="{video_url}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            else:
-                st.error('No video found')
-            # st.write(pbp)
-    rebound1 = rebound[rebound['court_x'] > 425]
-    rebound2 = rebound[rebound['court_x'] <= 425]
-    court_fig2 = go.Figure()
-    draw_plotly_court(court_fig2, show_title=False, labelticks=False, show_axis=False,
-                                glayer='above', bg_color='dark gray', margins=0)
-    court_fig2.add_trace(go.Histogram2dContour(
-        x=rebound1['court_y'],  # Passer x-coordinates
-        y=rebound1['court_x'],  # Passer y-coordinates
-        # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-        colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-        # opacity=0.6,  # Make the contour semi-transparent
-        contours=dict(
-            coloring='heatmap',  # Coloring the contours based on heatmap density
-            showlabels=False,  # Show contour labels (optional)
-            labelfont=dict(size=12)  # Font size of the contour labels (optional)
-        ),
-        showlegend=False,
-         hovertemplate='Rebounds: %{z}<extra></extra>'
-    ))
-    court_fig2.add_trace(go.Histogram2dContour(
-        x=rebound2['court_y'],  # Passer x-coordinates
-        y=rebound2['court_x'],  # Passer y-coordinates
-        # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-        colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-        # opacity=0.6,  # Make the contour semi-transparent
-        contours=dict(
-            coloring='heatmap',  # Coloring the contours based on heatmap density
-            showlabels=False,  # Show contour labels (optional)
-            labelfont=dict(size=12)  # Font size of the contour labels (optional)
-        ),
-        showlegend=False,
-        hovertemplate='Rebounds: %{z}<extra></extra>'
-    ))
-    court_fig2.update_traces(showscale=False)
-    with c2:
-        st.plotly_chart(court_fig2,use_container_width=False)
-    ca1,ca2 = st.columns(2)
-    with ca1:
-        histfig = px.histogram(data_frame=rebound,x='second_action',color='period')
-        histfig.update_traces(marker_line_color='black', marker_line_width=1)
-        histfig.update_layout(
-        title="Rebound Counts"
-    )
-        st.plotly_chart(histfig)
-    with ca2:
-        barfig = px.histogram(rebound,x='period',color='action_type')
-        barfig.update_traces(marker_line_color='black', marker_line_width=1)
-        barfig.update_layout(title='Rebound Counts by Period')
-        st.plotly_chart(barfig)
-    cb1,cb2 = st.columns(2)
-    with cb1:
-        rebound2 = rebound
-        # passer2['play_descriptors'] = passer2['play_descriptors'].apply(ast.literal_eval)
-        rebound_exploded = rebound2.explode('play_descriptors')
-        fig = px.box(rebound_exploded, 
-             x='play_descriptors', 
-             y='distance_from_shot', 
-             title='Distance From Shot Distribution by Descriptor',
-             points='outliers')
-
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig)
-    with cb2:
-        if rebounder or teamorplayer == 'Player':
-            counts = rebound['shooter_name'].value_counts().reset_index().head(10)
-            counts.columns = ['shooter_name', 'count']
-            piefig = px.pie(counts, names='shooter_name', values='count', title='Top 10 Shooter Rebound Distribution')
-        else:
-            counts = rebound['secondary_name'].value_counts().reset_index()
-            counts.columns = ['secondary_name', 'count']
-            piefig = px.pie(counts, names='secondary_name', values='count', title='Rebound Distribution by Player')
-        st.plotly_chart(piefig)
-if nav == 'Blocks':
-    st.warning('Note: Some blocks may be missing due to missing tracking data')
-
+st.warning('Note: Some blocks may be missing due to missing tracking data')
+if season != '2024-25':
     hover_template = (
         "<b>Blocker<b>: %{customdata[0]}<br>" +
         "<b>Shooter<b>: %{customdata[1]}<br>" + 
@@ -1165,156 +535,185 @@ if nav == 'Blocks':
         "<b>Date<b>: %{customdata[8]}<br>" 
 
     )
-    block = fulldf
-    # teamids = block['team_id'].unique()
-    # block = block[(block['court_player_name'] == block['secondary_name'])]
-    # block['team_id'] = block['team_id'].astype(int)
-    # teamid = int(teamid)
-    # block = block[block['team_id'] != teamid]
-    block['distance_covered'] = round(np.sqrt((block['shot_x'] - block['court_x'])**2 + (block['shot_y'] - block['court_y'])**2),2)
-    block['play_descriptors'] = block['play_descriptors'].apply(ast.literal_eval)
+else:
+    hover_template = (
+        "<b>Blocker<b>: %{customdata[0]}<br>" +
+        "<b>Shooter<b>: %{customdata[1]}<br>" + 
+        "<b>Distance Covered<b>: %{customdata[2]} ft<br>" + 
+        "<b>Block Angle<b>: %{customdata[7]}°<br>" +
+        "<b>Period<b>: %{customdata[3]}<br>" +
+        "<b>Time<b>: %{customdata[4]}<br>" + 
+        "<b>Shot Type<b>: %{customdata[5]} (%{customdata[6]})<br>" 
+    )
+block = fulldf
+# teamids = block['team_id'].unique()
+# block = block[(block['court_player_name'] == block['secondary_name'])]
+# block['team_id'] = block['team_id'].astype(int)
+# teamid = int(teamid)
+# block = block[block['team_id'] != teamid]
+block['distance_covered'] = round(np.sqrt((block['shot_x'] - block['court_x'])**2 + (block['shot_y'] - block['court_y'])**2),2)
+block['play_descriptors'] = block['play_descriptors'].apply(ast.literal_eval)
 
-    # block['angle_degrees'] = round(np.degrees(block['Angle with the Closest Defender']))
-    # block['angle_degrees'] = block['angle_degrees'].apply(lambda x: x - 90 if x > 90 else x)
+# block['angle_degrees'] = round(np.degrees(block['Angle with the Closest Defender']))
+# block['angle_degrees'] = block['angle_degrees'].apply(lambda x: x - 90 if x > 90 else x)
 
-    block['court_x'] = 10*block['court_x']-50
-    block['court_y'] = 10*block['court_y']-250
-    block['shot_x'] = 10*block['shot_x']-50
-    block['shot_y'] = 10*block['shot_y']-250
+block['court_x'] = 10*block['court_x']-50
+block['court_y'] = 10*block['court_y']-250
+block['shot_x'] = 10*block['shot_x']-50
+block['shot_y'] = 10*block['shot_y']-250
 
-    block['time'] = block['minutes'].astype(str) + ':' + block['seconds'].astype(str)
-    # block['feature_store'] = block['feature_store'].apply(json.loads)
-    # feature_df = block['feature_store'].apply(pd.Series)
-    # block = block.drop(columns=['feature_store'])  # Optional
-    # block = pd.concat([block, feature_df], axis=1)
-    block['ClosestDefVelBlockAng'] = round(np.rad2deg(block['Closest Defender Velocity Angle']))
-    st.sidebar.title('Filters')
-    blockers = block['secondary_name'].unique()
-    shooters = block['shooter_name'].unique()
-    blocker = st.sidebar.multiselect('Select blocker',blockers)
-    shooter = st.sidebar.multiselect('Select shooters',shooters)
-    period_filter = st.sidebar.selectbox(
-            "Period", 
-            options=["All"] + sorted(block['period'].unique().tolist())
-        )
+block['time'] = block['minutes'].astype(str) + ':' + block['seconds'].astype(str)
+# block['feature_store'] = block['feature_store'].apply(json.loads)
+# feature_df = block['feature_store'].apply(pd.Series)
+# block = block.drop(columns=['feature_store'])  # Optional
+# block = pd.concat([block, feature_df], axis=1)
+block['ClosestDefVelBlockAng'] = round(np.rad2deg(block['Closest Defender Velocity Angle']))
+st.sidebar.title('Filters')
+blockers = block['secondary_name'].unique()
+shooters = block['shooter_name'].unique()
+blocker = st.sidebar.multiselect('Select blocker',blockers)
+shooter = st.sidebar.multiselect('Select shooters',shooters)
+period_filter = st.sidebar.selectbox(
+        "Period", 
+        options=["All"] + sorted(block['period'].unique().tolist())
+    )
 
-    minutesmin, minutesmax = st.sidebar.slider(
-            "Minutes", 
-            min_value=int(block['minutes'].min()), 
-            max_value=int(block['minutes'].max()), 
-            value=(int(block['minutes'].min()), int(block['minutes'].max()))
-        )
-    block = block[
-            (block['minutes'] >= minutesmin) & 
-            (block['minutes'] <= minutesmax)
-        ]
-    if period_filter != "All":
-            block = block[block['period'] == period_filter]
-    unique_descriptors = set([descriptor for sublist in block['play_descriptors'] for descriptor in sublist])
-    unique_descriptors = sorted(unique_descriptors)
-    selected_descriptors = st.sidebar.multiselect("Choose play descriptors", unique_descriptors)
-    if selected_descriptors:
-        block = block[block['play_descriptors'].apply(lambda x: any(descriptor in x for descriptor in selected_descriptors))]
-    if shooter:
-        block = block[block['shooter_name'].isin(shooter)]
-    if blocker:
-        block = block[block['secondary_name'].isin(blocker)]
-    dist_min, dist_max = st.sidebar.slider(
-            "Distance Covered (ft)", 
-            min_value=int(block['distance_covered'].min()), 
-            max_value=int(block['distance_covered'].max()), 
-            value=(int(block['distance_covered'].min()), int(block['distance_covered'].max()))
-        )
-    block = block[
-            (block['distance_covered'] >= dist_min) & 
-            (block['distance_covered'] <= dist_max)
-        ]
-    # st.write(len(block))
-    arrows = st.sidebar.checkbox('Hide arrows',value=False)
-    # location = st.sidebar.radio('Block Location',['Start','End','None'])
+minutesmin, minutesmax = st.sidebar.slider(
+        "Minutes", 
+        min_value=int(block['minutes'].min()), 
+        max_value=int(block['minutes'].max()), 
+        value=(int(block['minutes'].min()), int(block['minutes'].max()))
+    )
+block = block[
+        (block['minutes'] >= minutesmin) & 
+        (block['minutes'] <= minutesmax)
+    ]
+if period_filter != "All":
+        block = block[block['period'] == period_filter]
+unique_descriptors = set([descriptor for sublist in block['play_descriptors'] for descriptor in sublist])
+unique_descriptors = sorted(unique_descriptors)
+selected_descriptors = st.sidebar.multiselect("Choose play descriptors", unique_descriptors)
+if selected_descriptors:
+    block = block[block['play_descriptors'].apply(lambda x: any(descriptor in x for descriptor in selected_descriptors))]
+if shooter:
+    block = block[block['shooter_name'].isin(shooter)]
+if blocker:
+    block = block[block['secondary_name'].isin(blocker)]
+dist_min, dist_max = st.sidebar.slider(
+        "Distance Covered (ft)", 
+        min_value=int(block['distance_covered'].min()), 
+        max_value=int(block['distance_covered'].max()), 
+        value=(int(block['distance_covered'].min()), int(block['distance_covered'].max()))
+    )
+block = block[
+        (block['distance_covered'] >= dist_min) & 
+        (block['distance_covered'] <= dist_max)
+    ]
+# st.write(len(block))
+arrows = st.sidebar.checkbox('Hide arrows',value=False)
+# location = st.sidebar.radio('Block Location',['Start','End','None'])
 
-    court_fig = go.Figure()
-    draw_plotly_court(court_fig, show_title=False, labelticks=False, show_axis=False,
-                                glayer='above', bg_color='dark gray', margins=0)
-    if arrows == False:
-        for i in range(len(block)):
-            court_fig.add_trace(go.Scatter(
-                        x=[block['court_y'].iloc[i], block['shot_y'].iloc[i]],  # Passer and Shooter x coordinates
-                        y=[block['court_x'].iloc[i], block['shot_x'].iloc[i]],  # Passer and Shooter y coordinates
-                        mode='lines+markers',
-                        line=dict(color='gold', width=2, shape='linear'),  # Arrow properties
-                        marker=dict(size=10, color='gold',symbol='arrow',angleref="previous",opacity=1),  # Optional: Add a marker at the passer's location
-                        opacity=0.5,
-                        # customdata=passer[['court_player_name','shooter_name']].iloc[i],  # Use customdata for makes only
-                        hoverinfo='none',  # Set hoverinfo to text
-                        # hovertemplate=hover_template
-                        # name=f'Pass to Shooter {i+1}',
-                    ))
-    # if location == 'Start':
-    #     court_fig.add_trace(go.Scatter(
-    #             x=block['court_y'], 
-    #             y=block['court_x'], 
-    #             mode='markers',
-    #             marker=dict(size=10, color='blue', opacity=1,symbol='circle'),
-    #             name='',
-    #             customdata=block[['court_player_name','shooter_name','distance_covered','period','time','action_type','play_descriptors','game_name','game_datetime_utc']],  # Use customdata for makes only
-    #             hoverinfo='text',  # Set hoverinfo to text
-    #             hovertemplate=hover_template
-    #         ))
-    # if location == 'End':
-    # block.loc[block['court_x'] > 425, 'court_x'] = 1000 - block.loc[block['court_x'] > 425, 'court_x']
-    court_fig.add_trace(go.Scatter(
-            x=block['shot_y'], 
-            y=block['shot_x'], 
-            mode='markers',
-            marker=dict(size=10, color='red', opacity=1,symbol='x'),
-            name='',
-            customdata=block[['court_player_name','shooter_name','distance_covered','period','time','action_type','play_descriptors','game_name','game_datetime_utc','ClosestDefVelBlockAng']],  # Use customdata for makes only
-            hoverinfo='text',  # Set hoverinfo to text
-            hovertemplate=hover_template
-        ))
-    c1,c2 = st.columns(2)
-    with c1:
-        # st.plotly_chart(court_fig,use_container_width=False)
-        eventdata = st.plotly_chart(court_fig,use_container_width=True,on_select='rerun')
-    block1 = block[block['court_x'] > 425]
-    block2 = block[block['court_x'] <= 425]
-    # st.write(block1)
+court_fig = go.Figure()
+draw_plotly_court(court_fig, show_title=False, labelticks=False, show_axis=False,
+                            glayer='above', bg_color='dark gray', margins=0)
+if arrows == False:
+    for i in range(len(block)):
+        court_fig.add_trace(go.Scatter(
+                    x=[block['court_y'].iloc[i], block['shot_y'].iloc[i]],  # Passer and Shooter x coordinates
+                    y=[block['court_x'].iloc[i], block['shot_x'].iloc[i]],  # Passer and Shooter y coordinates
+                    mode='lines+markers',
+                    line=dict(color='gold', width=2, shape='linear'),  # Arrow properties
+                    marker=dict(size=10, color='gold',symbol='arrow',angleref="previous",opacity=1),  # Optional: Add a marker at the passer's location
+                    opacity=0.5,
+                    # customdata=passer[['court_player_name','shooter_name']].iloc[i],  # Use customdata for makes only
+                    hoverinfo='none',  # Set hoverinfo to text
+                    # hovertemplate=hover_template
+                    # name=f'Pass to Shooter {i+1}',
+                ))
+# if location == 'Start':
+#     court_fig.add_trace(go.Scatter(
+#             x=block['court_y'], 
+#             y=block['court_x'], 
+#             mode='markers',
+#             marker=dict(size=10, color='blue', opacity=1,symbol='circle'),
+#             name='',
+#             customdata=block[['court_player_name','shooter_name','distance_covered','period','time','action_type','play_descriptors','game_name','game_datetime_utc']],  # Use customdata for makes only
+#             hoverinfo='text',  # Set hoverinfo to text
+#             hovertemplate=hover_template
+#         ))
+# if location == 'End':
+# block.loc[block['court_x'] > 425, 'court_x'] = 1000 - block.loc[block['court_x'] > 425, 'court_x']
+if season != '2024-25':
+        cdata = block[['court_player_name','shooter_name','distance_covered','period','time','action_type','play_descriptors','game_name','game_datetime_utc','ClosestDefVelBlockAng']]
+else:
+        cdata = block[['court_player_name','shooter_name','distance_covered','period','time','action_type','play_descriptors','ClosestDefVelBlockAng']]
+court_fig.add_trace(go.Scatter(
+        x=block['shot_y'], 
+        y=block['shot_x'], 
+        mode='markers',
+        marker=dict(size=10, color='red', opacity=1,symbol='x'),
+        name='',
+        customdata=cdata,  # Use customdata for makes only
+        hoverinfo='text',  # Set hoverinfo to text
+        hovertemplate=hover_template
+    ))
+c1,c2 = st.columns(2)
+with c1:
+    # st.plotly_chart(court_fig,use_container_width=False)
+    eventdata = st.plotly_chart(court_fig,use_container_width=True,on_select='rerun')
+block1 = block[block['court_x'] > 425]
+block2 = block[block['court_x'] <= 425]
+# st.write(block1)
 
-    court_fig2 = go.Figure()
-    draw_plotly_court(court_fig2, show_title=False, labelticks=False, show_axis=False,
-                                glayer='above', bg_color='dark gray', margins=0)
-    # if location == 'Start':
-    #     court_fig2.add_trace(go.Histogram2dContour(
-    #         x=block1['court_y'],  # Passer x-coordinates
-    #         y=block1['court_x'],  # Passer y-coordinates
-    #         # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         # opacity=0.6,  # Make the contour semi-transparent
-    #         contours=dict(
-    #             coloring='heatmap',  # Coloring the contours based on heatmap density
-    #             showlabels=False,  # Show contour labels (optional)
-    #             labelfont=dict(size=12)  # Font size of the contour labels (optional)
-    #         ),
-    #         showlegend=False
-    #     ))
-    #     court_fig2.add_trace(go.Histogram2dContour(
-    #         x=block2['court_y'],  # Passer x-coordinates
-    #         y=block2['court_x'],  # Passer y-coordinates
-    #         # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-    #         # opacity=0.6,  # Make the contour semi-transparent
-    #         contours=dict(
-    #             coloring='heatmap',  # Coloring the contours based on heatmap density
-    #             showlabels=False,  # Show contour labels (optional)
-    #             labelfont=dict(size=12)  # Font size of the contour labels (optional)
-    #         ),
-    #         showlegend=False
-    #     ))
-    # if location == 'End':
-    court_fig2.add_trace(go.Histogram2dContour(
-    x=block1['shot_y'],  # Passer x-coordinates
-    y=block1['shot_x'],  # Passer y-coordinates
+court_fig2 = go.Figure()
+draw_plotly_court(court_fig2, show_title=False, labelticks=False, show_axis=False,
+                            glayer='above', bg_color='dark gray', margins=0)
+# if location == 'Start':
+#     court_fig2.add_trace(go.Histogram2dContour(
+#         x=block1['court_y'],  # Passer x-coordinates
+#         y=block1['court_x'],  # Passer y-coordinates
+#         # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
+#         colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
+#         # opacity=0.6,  # Make the contour semi-transparent
+#         contours=dict(
+#             coloring='heatmap',  # Coloring the contours based on heatmap density
+#             showlabels=False,  # Show contour labels (optional)
+#             labelfont=dict(size=12)  # Font size of the contour labels (optional)
+#         ),
+#         showlegend=False
+#     ))
+#     court_fig2.add_trace(go.Histogram2dContour(
+#         x=block2['court_y'],  # Passer x-coordinates
+#         y=block2['court_x'],  # Passer y-coordinates
+#         # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
+#         colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
+#         # opacity=0.6,  # Make the contour semi-transparent
+#         contours=dict(
+#             coloring='heatmap',  # Coloring the contours based on heatmap density
+#             showlabels=False,  # Show contour labels (optional)
+#             labelfont=dict(size=12)  # Font size of the contour labels (optional)
+#         ),
+#         showlegend=False
+#     ))
+# if location == 'End':
+court_fig2.add_trace(go.Histogram2dContour(
+x=block1['shot_y'],  # Passer x-coordinates
+y=block1['shot_x'],  # Passer y-coordinates
+# colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
+colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
+# opacity=0.6,  # Make the contour semi-transparent
+contours=dict(
+    coloring='heatmap',  # Coloring the contours based on heatmap density
+    showlabels=False,  # Show contour labels (optional)
+    labelfont=dict(size=12)  # Font size of the contour labels (optional)
+),
+showlegend=False,
+hovertemplate='Blocks: %{z}<extra></extra>'
+
+))
+court_fig2.add_trace(go.Histogram2dContour(
+    x=block2['shot_y'],  # Passer x-coordinates
+    y=block2['shot_x'],  # Passer y-coordinates
     # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
     colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
     # opacity=0.6,  # Make the contour semi-transparent
@@ -1325,160 +724,150 @@ if nav == 'Blocks':
     ),
     showlegend=False,
     hovertemplate='Blocks: %{z}<extra></extra>'
-
 ))
-    court_fig2.add_trace(go.Histogram2dContour(
-        x=block2['shot_y'],  # Passer x-coordinates
-        y=block2['shot_x'],  # Passer y-coordinates
-        # colorscale=[[0, 'black'], [0.1, 'black'],[0.3, 'yellow'], [1, 'red']],  # Color scale for the contour
-        colorscale=[[0, 'black'],[0.2, 'yellow'], [1, 'red']],  # Color scale for the contour
-        # opacity=0.6,  # Make the contour semi-transparent
-        contours=dict(
-            coloring='heatmap',  # Coloring the contours based on heatmap density
-            showlabels=False,  # Show contour labels (optional)
-            labelfont=dict(size=12)  # Font size of the contour labels (optional)
-        ),
-        showlegend=False,
-        hovertemplate='Blocks: %{z}<extra></extra>'
-    ))
-    court_fig2.update_traces(showscale=False)
-    with c2:
-        st.plotly_chart(court_fig2,use_container_width=False)
-    # st.write(eventdata)
-    if eventdata and "selection" in eventdata and eventdata["selection"]["points"]:
-        x = eventdata["selection"]["points"][0]["x"]
-        y = eventdata["selection"]["points"][0]["y"]
-        date = eventdata["selection"]["points"][0]["customdata"][8]
-        time = eventdata["selection"]["points"][0]["customdata"][4]
-        time = time.replace(".0", "")
-        period = eventdata["selection"]["points"][0]["customdata"][3]
-        date_obj = datetime.strptime(date, "%m-%d-%Y")
-        for offset in [0, -1, 1]:
-            current_date = date_obj + timedelta(days=offset)
-            formatted_date = current_date.strftime("%Y-%m-%d")
-            
-            filtered_games = gamefind[gamefind["GAME_DATE"] == formatted_date]
-            
-            if not filtered_games.empty:
-                # st.write(f"Using date: {formatted_date}")
-                gamefind = filtered_games
-                break
-        nbagameid = gamefind["GAME_ID"].iloc[0]
-        oldgameid = nbagameid
-        nbagameid = str(nbagameid)[2:]
-        # st.write(gamefind)
-        # st.write(x)
-        # st.write(y)
-        # st.write(nbagameid)
-        pbp = pbp.PlayByPlayV3(game_id=oldgameid).get_data_frames()[0]
+court_fig2.update_traces(showscale=False)
+with c2:
+    st.plotly_chart(court_fig2,use_container_width=False)
+if eventdata and "selection" in eventdata and eventdata["selection"]["points"]:
+    x = eventdata["selection"]["points"][0]["x"]
+    y = eventdata["selection"]["points"][0]["y"]
+    date = eventdata["selection"]["points"][0]["customdata"][8]
+    time = eventdata["selection"]["points"][0]["customdata"][4]
+    time = time.replace(".0", "")
+    period = eventdata["selection"]["points"][0]["customdata"][3]
+    date_obj = datetime.strptime(date, "%m-%d-%Y")
+    for offset in [0, -1, 1]:
+        current_date = date_obj + timedelta(days=offset)
+        formatted_date = current_date.strftime("%Y-%m-%d")
         
-        pbp['time'] = pbp['clock'].apply(fixTime)
-        # st.write(pbp)
+        filtered_games = gamefind[gamefind["GAME_DATE"] == formatted_date]
+        
+        if not filtered_games.empty:
+            # st.write(f"Using date: {formatted_date}")
+            gamefind = filtered_games
+            break
+    nbagameid = gamefind["GAME_ID"].iloc[0]
+    oldgameid = nbagameid
+    # nbagameid = str(nbagameid)[2:]
+    # st.write(gamefind)
+    # st.write(x)
+    # st.write(y)
+    # st.write(nbagameid)
+    pbp = pbp.PlayByPlayV3(game_id=oldgameid).get_data_frames()[0]
+    
+    pbp['time'] = pbp['clock'].apply(fixTime)
+    # st.write(pbp)
 
-        # Convert your input time string to timedelta
-        target_time = parse_time_str(time)
+    # Convert your input time string to timedelta
+    target_time = parse_time_str(time)
 
-        # First try exact match
-        for offset in [0, -1, 1]:  # seconds
-            adjusted_time = target_time + timedelta(seconds=offset)
-            
-            # Convert back to string to match the format in your DataFrame
-            minutes = int(adjusted_time.total_seconds() // 60)
-            seconds = adjusted_time.total_seconds() % 60
-            adjusted_time_str = f"{minutes}:{seconds:.1f}".rstrip('0').rstrip('.')
+    # First try exact match
+    for offset in [0, -1, 1]:  # seconds
+        adjusted_time = target_time + timedelta(seconds=offset)
+        
+        # Convert back to string to match the format in your DataFrame
+        minutes = int(adjusted_time.total_seconds() // 60)
+        seconds = adjusted_time.total_seconds() % 60
+        adjusted_time_str = f"{minutes}:{seconds:.1f}".rstrip('0').rstrip('.')
 
-            # Apply filter
-            filtered_pbp = pbp[(pbp['period'] == period) & (pbp['time'] == adjusted_time_str)]
+        # Apply filter
+        filtered_pbp = pbp[(pbp['period'] == period) & (pbp['time'] == adjusted_time_str)]
 
-            if not filtered_pbp.empty:
-                pbp = filtered_pbp
-                break
-        actionid = pbp["actionNumber"].iloc[0]
-        url = f'https://api.databallr.com/api/get_video/{nbagameid}/{actionid}'
-        response = requests.get(url)
-        if response.status_code == 200:
-            video_url = response.text.strip()
-            st.markdown(
-                f"""
-                <div style="text-align: center;">
-                    <video controls autoplay width="500" style="margin: auto;">
-                        <source src="{video_url}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        else:
-            st.error('No video found')
-    ca1,ca2 = st.columns(2)
-    with ca1:
-        histfig = px.histogram(data_frame=block,x='distance_covered')
-        histfig.update_traces(marker_line_color='black', marker_line_width=1)
-        histfig.update_layout(
-        title="Distance Covered Distribution",
-        xaxis_title="Distance Covered (ft)",
-        yaxis_title="Count"
-    )
-        st.plotly_chart(histfig)
-    with ca2:
-        barfig = px.histogram(block,x='period',color='action_type')
-        barfig.update_traces(marker_line_color='black', marker_line_width=1)
-        barfig.update_layout(title='Block Counts by Period')
-        st.plotly_chart(barfig)
-    cb1,cb2 = st.columns(2)
-    with cb1:
-        block2 = block
-        # passer2['play_descriptors'] = passer2['play_descriptors'].apply(ast.literal_eval)
-        block_exploded = block2.explode('play_descriptors')
-        fig = px.box(block_exploded, 
-             x='play_descriptors', 
-             y='distance_covered', 
-             title='Distance Covered Distribution by Descriptor',
-             points='outliers')
+        if not filtered_pbp.empty:
+            pbp = filtered_pbp
+            break
+    headers = {
+        'Host': 'stats.nba.com',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'x-nba-stats-origin': 'stats',
+        'x-nba-stats-token': 'true',
+        'Connection': 'keep-alive',
+        'Referer': 'https://stats.nba.com/',
+        'Pragma': 'no-cache',
+        'Cache-Control': 'no-cache'
+    }
+    actionid = pbp["actionNumber"].iloc[0]
+    # url = f'https://api.databallr.com/api/get_video/{nbagameid}/{actionid}'
+    url = 'https://stats.nba.com/stats/videoeventsasset?GameEventID={}&GameID={}'.format(
+                    actionid, nbagameid)
+    r = requests.get(url, headers=headers)
+    if r.status_code == 200:
+        json = r.json()
+        video_urls = json['resultSets']['Meta']['videoUrls']
+        playlist = json['resultSets']['playlist']
+        video_event = {'video': video_urls[0]['lurl'], 'desc': playlist[0]['dsc']}
+        video = video_urls[0]['lurl']
+        # video_url = response.text.strip()
+        # st.markdown(
+        #     f"""
+        #     <div style="text-align: center;">
+        #         <video controls autoplay width="500" style="margin: auto;">
+        #             <source src="{video_url}" type="video/mp4">
+        #             Your browser does not support the video tag.
+        #         </video>
+        #     </div>
+        #     """,
+        #     unsafe_allow_html=True
+        # )
+        st.video(video,autoplay=True)
+    else:
+        st.error('ERROR')
+ca1,ca2 = st.columns(2)
+with ca1:
+    histfig = px.histogram(data_frame=block,x='distance_covered')
+    histfig.update_traces(marker_line_color='black', marker_line_width=1)
+    histfig.update_layout(
+    title="Distance Covered Distribution",
+    xaxis_title="Distance Covered (ft)",
+    yaxis_title="Count"
+)
+    st.plotly_chart(histfig)
+with ca2:
+    barfig = px.histogram(block,x='period',color='action_type')
+    barfig.update_traces(marker_line_color='black', marker_line_width=1)
+    barfig.update_layout(title='Block Counts by Period')
+    st.plotly_chart(barfig)
+cb1,cb2 = st.columns(2)
+with cb1:
+    block2 = block
+    # passer2['play_descriptors'] = passer2['play_descriptors'].apply(ast.literal_eval)
+    block_exploded = block2.explode('play_descriptors')
+    fig = px.box(block_exploded, 
+            x='play_descriptors', 
+            y='distance_covered', 
+            title='Distance Covered Distribution by Descriptor',
+            points='outliers')
 
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig)
-    with cb2:
-        if blocker or teamorplayer:
-            counts = block['shooter_name'].value_counts().reset_index().head(10)
-            counts.columns = ['shooter_name', 'count']
-            piefig = px.pie(counts, names='shooter_name', values='count', title='Top 10 Players Blocked')
-        else:
-            counts = block['secondary_name'].value_counts().reset_index()
-            counts.columns = ['secondary_name', 'count']
-            piefig = px.pie(counts, names='secondary_name', values='count', title='Block Distribution by Player')
-        st.plotly_chart(piefig)
+    fig.update_layout(xaxis_tickangle=-45)
+    st.plotly_chart(fig)
+with cb2:
+    if blocker or teamorplayer:
+        counts = block['shooter_name'].value_counts().reset_index().head(10)
+        counts.columns = ['shooter_name', 'count']
+        piefig = px.pie(counts, names='shooter_name', values='count', title='Top 10 Players Blocked')
+    else:
+        counts = block['secondary_name'].value_counts().reset_index()
+        counts.columns = ['secondary_name', 'count']
+        piefig = px.pie(counts, names='secondary_name', values='count', title='Block Distribution by Player')
+    st.plotly_chart(piefig)
 st.sidebar.subheader('')
 st.sidebar.markdown(
-    """
-    <h1 style='text-align: center; 
-               font-size: 20px; 
-               color: #39ff14; 
-               text-shadow: 0 0 5px #39ff14, 
-                            0 0 10px #39ff14, 
-                            0 0 20px #39ff14, 
-                            0 0 40px #0fa, 
-                            0 0 80px #0fa;'>
-        Data from ShotQuality
-    </h1>
-    """,
-    unsafe_allow_html=True
+"""
+<h1 style='text-align: center; 
+            font-size: 20px; 
+            color: #39ff14; 
+            text-shadow: 0 0 5px #39ff14, 
+                        0 0 10px #39ff14, 
+                        0 0 20px #39ff14, 
+                        0 0 40px #0fa, 
+                        0 0 80px #0fa;'>
+    Data from ShotQuality
+</h1>
+""",
+unsafe_allow_html=True
 )
-# import requests
-# import pandas as pd
-# import streamlit as st
-# # Define the API URL
-# url = "https://api.databallr.com/api/supabase/sqpbp?game_id=22401064&limit=100000"
-
-# # Send a GET request to fetch the raw JSON data
-# response = requests.get(url)
-# data = response.json()
-
-# # Convert the JSON data into a Pandas DataFrame
-# df = pd.json_normalize(data)
-
-# # Display the first few rows of the DataFrame
-# st.write(df)
 
 
